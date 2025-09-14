@@ -1,0 +1,16 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.node.json" }
+  ],
+  "compilerOptions": {
+    // ...existing code...
+    "baseUrl": ".",
+    "paths": {
+      "@components/*": ["src/App/Components/*"],
+      "@api/*": ["src/App/api/*"],
+      "@supabase": ["utils/supabase"]
+    }
+  }
+}
