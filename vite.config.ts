@@ -6,4 +6,12 @@ import tsconfigPaths from "vite-tsconfig-paths";
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), tsconfigPaths()],
+  optimizeDeps: {
+    include: ["pdfjs-dist"],
+  },
+  server: {
+    fs: {
+      allow: [".."],
+    },
+  },
 });

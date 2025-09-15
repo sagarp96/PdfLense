@@ -1,6 +1,6 @@
 import { FiUpload } from "react-icons/fi";
 import { useDropzone } from "react-dropzone";
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback } from "react";
 import ProcessingIndicator from "./UI/Pdf_process_Status";
 import supabase from "../../../utils/supabase";
 
@@ -20,15 +20,14 @@ export interface ProcessedDocument {
 }
 
 export default function FileUpload({
-  fileProcessed,
+  onDocumentProcessed,
 }: {
-  fileProcessed: boolean;
+  onDocumentProcessed: (processedDocument: ProcessedDocument) => void;
 }) {
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(
     null
   );
   const [error, setError] = useState<string | null>(null);
-  const setfileProcessed = useRef(fileProcessed);
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     const bucket = "pdfs"; // Match your Edge Function expectation
     const id = crypto.randomUUID();
@@ -96,7 +95,7 @@ export default function FileUpload({
         progress: 100,
         message: `Successfully processed`,
       });
-      setfileProcessed.current = true;
+      onDocumentProcessed(result);
       // You can also pass the result to a parent component or context if needed
       console.log("Processed Document:", result);
     } catch (error) {

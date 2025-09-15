@@ -1,4 +1,4 @@
-import { corsHeaders } from "./_shared/cors.ts";
+import { corsHeaders } from "../_shared/cors.ts";
 import { createClient } from "@supabase/supabase-js";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
