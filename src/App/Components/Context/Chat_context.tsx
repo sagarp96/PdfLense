@@ -78,7 +78,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
     dispatch({ type: "SET_LOADING", payload: true });
 
-    // Add user message
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
       role: "user",

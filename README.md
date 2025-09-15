@@ -22,6 +22,8 @@ A minimal NotebookLM-style app. Upload a PDF, view it, and ask questions through
 
 ## Architecture at a glance
 
+![alt text](<CleanShot 2025-09-15 at 19.47.11@2x.png>)
+
 - The client uploads PDFs to Supabase Storage and renders them with react-pdf.
 - Chat messages and citations are handled in the UI; citation buttons call `goToPage` to sync the viewer.
 - Public URLs for PDFs are derived from Supabase Storage.

@@ -152,7 +152,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const aiResponse = await generateResponse(message, context);
     console.log("AI response generated successfully");
 
-    //  Store AI response with citations
+    //Store AI response with citations
     console.log("Storing assistant message...");
     const { data: assistantMessage, error: assistantError } = await supabase
       .from("chat_messages")
