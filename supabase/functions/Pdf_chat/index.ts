@@ -1,10 +1,10 @@
 import { corsHeaders } from "../_shared/cors.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "@supabase/supabase-js";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const JINA_API_KEY = Deno.env.get("JINA_API_KEY")!;
-const GROQ_API_KEY = Deno.env.get("GROQ_API_KEY")!;
+const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY")!;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -61,7 +61,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       console.log("Using existing session:", chatSessionId);
     }
 
-    // 2. Store user message
+    // Store user message
     console.log("Storing user message...");
     const { error: userMessageError } = await supabase
       .from("chat_messages")
@@ -77,12 +77,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
     console.log("User message stored successfully");
 
-    // 3. Generate embedding for user message
+    //Generate embedding for user message
     console.log("Generating embedding for query...");
     const queryEmbedding = await generateEmbedding(message);
     console.log("Embedding generated, length:", queryEmbedding.length);
 
-    // 4. Search for relevant chunks
+    //  Search for relevant chunks
     console.log("Searching for relevant document chunks...");
     const { data: relevantChunks, error: searchError } = await supabase
       .rpc("match_documents", {
@@ -123,26 +123,36 @@ Deno.serve(async (req: Request): Promise<Response> => {
       });
     }
 
-    // 5. Create context and citations
+    // Create context and citations
     console.log("Creating context from chunks...");
     const context = relevantChunks
       .map((chunk: any) => `[Page ${chunk.page_number}] ${chunk.content}`)
       .join("\n\n");
 
-    const citations = relevantChunks.map((chunk: any) => ({
-      page: chunk.page_number,
-      content: chunk.content.slice(0, 100) + "...",
-      similarity: chunk.similarity,
+    if (relevantChunks) {
+      console.log(
+        "Chunk details:",
+        relevantChunks.map((c: any) => ({
+          id: c.chunk_id,
+          page: c.page_number,
+          similarity: c.similarity,
+        })),
+      );
+    }
+    const citations = (relevantChunks || []).map((c: any) => ({
+      page: c.page_number,
+      content: c.content.slice(0, 100) + "...",
+      similarity: c.similarity,
     }));
 
     console.log("Context created, citations:", citations.length);
 
-    // 6. Generate AI response
+    //Generate AI response
     console.log("Generating AI response...");
     const aiResponse = await generateResponse(message, context);
     console.log("AI response generated successfully");
 
-    // 7. Store AI response with citations
+    //  Store AI response with citations
     console.log("Storing assistant message...");
     const { data: assistantMessage, error: assistantError } = await supabase
       .from("chat_messages")
@@ -213,45 +223,38 @@ async function generateResponse(
   query: string,
   context: string,
 ): Promise<string> {
-  console.log("Calling Groq API for response generation...");
-
+  const apiUrl =
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
   const systemPrompt =
     `You are a helpful AI assistant that answers questions about PDF documents. 
 Use the provided context to answer the user's question accurately and concisely. 
-If the answer isn't in the context, say so. Always cite page numbers when referencing information.
+If the answer isn't in the context, say so. Always cite page numbers when referencing information.`;
 
-Context from the document:
-${context}`;
+  const prompt =
+    `${systemPrompt}\n\nContext from the document:\n${context}\n\nUser Question:\n${query}`;
 
-  const response = await fetch(
-    "https://api.groq.com/openai/v1/chat/completions",
-    {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${GROQ_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "llama3-8b-8192",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: query },
-        ],
-        max_tokens: 500,
-        temperature: 0.3,
-      }),
+  const response = await fetch(apiUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
     },
-  );
+    body: JSON.stringify({
+      contents: [{
+        parts: [{ text: prompt }],
+      }],
+      // Optional: Add safety settings if needed
+      // safetySettings: [ ... ],
+    }),
+  });
 
   if (!response.ok) {
     const errorText = await response.text();
-    console.error("Groq API error:", response.status, errorText);
-    throw new Error(`Groq API error: ${response.status} - ${errorText}`);
+    throw new Error(`Gemini API error: ${response.status} ${errorText}`);
   }
 
   const result = await response.json();
-  console.log("Groq API response received");
-  return result.choices[0].message.content;
+  return result.candidates?.[0]?.content?.parts?.[0]?.text ||
+    "Sorry, I could not generate a response.";
 }
 
 function jsonResponse(body: unknown, status = 200) {

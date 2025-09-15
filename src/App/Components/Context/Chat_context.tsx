@@ -102,8 +102,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         },
       });
 
-      console.log("Edge function response:", { data, error });
-
       if (error) throw error;
 
       // Add assistant message

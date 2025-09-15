@@ -41,7 +41,6 @@ const UploadProgress: React.FC<UploadProgressProps> = ({ progress }) => {
   };
   return (
     <div className="bg-white rounded-lg border p-6 max-w-md mx-auto">
-      {/* Stage Icon and Message */}
       <div className="flex items-center justify-center mb-4">
         <div className={`${getStageColor(progress.stage)} animate-pulse`}>
           {getStageIcon(progress.stage)}
@@ -51,7 +50,6 @@ const UploadProgress: React.FC<UploadProgressProps> = ({ progress }) => {
         </span>
       </div>
 
-      {/* Progress Bar */}
       <div className="mb-4">
         <div className="flex justify-between text-sm text-gray-600 mb-2">
           <span>Progress</span>

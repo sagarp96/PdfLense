@@ -96,7 +96,6 @@ export default function FileUpload({
         message: `Successfully processed`,
       });
       onDocumentProcessed(result);
-      // You can also pass the result to a parent component or context if needed
       console.log("Processed Document:", result);
     } catch (error) {
       setError(error instanceof Error ? error.message : "Processing failed");

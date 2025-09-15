@@ -218,9 +218,10 @@
 //   const maxAttempts = 30; // 5 minutes with 10s intervals
 //   const statusUrl =
 //     `https://api.cloud.llamaindex.ai/api/v1/parsing/job/${jobId}`;
-//   const resultUrl =
+//   const resultJsonUrl =
+//     `https://api.cloud.llamaindex.ai/api/v1/parsing/job/${jobId}/result`; // JSON with pages[]
+//   const resultMarkdownUrl =
 //     `https://api.cloud.llamaindex.ai/api/v1/parsing/job/${jobId}/result/markdown`;
-
 //   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 //     console.log(`Polling attempt ${attempt}/${maxAttempts} for job ${jobId}`);
 
@@ -242,41 +243,62 @@
 //     console.log("Current job status:", statusResult.status);
 
 //     if (statusResult.status === "SUCCESS") {
-//       console.log("Job complete. Fetching markdown result from:", resultUrl);
-//       const resultResponse = await fetch(resultUrl, {
+//       // 1) Try JSON pages
+//       try {
+//         const r1 = await fetch(resultJsonUrl, {
+//           headers: {
+//             Authorization: `Bearer ${LLAMA_CLOUD_API_KEY}`,
+//             Accept: "application/json",
+//           },
+//         });
+//         if (r1.ok) {
+//           const json = await r1.json();
+//           if (Array.isArray(json.pages)) {
+//             console.log("Result: JSON pages length =", json.pages.length);
+//             const marked = json.pages
+//               .map((p: any, i: number) => {
+//                 const pageNo = p.page ?? p.page_number ?? (i + 1);
+//                 const text = p.text ?? p.markdown ?? "";
+//                 return `--- page ${pageNo} ---\n${text}`;
+//               })
+//               .join("\n\n");
+//             return marked;
+//           }
+//           // Some responses may return { markdown: "..." } here
+//           if (typeof json.markdown === "string") {
+//             console.log("Result: JSON markdown string");
+//             return json.markdown;
+//           }
+//         } else {
+//           console.warn("Result JSON fetch not OK:", r1.status, await r1.text());
+//         }
+//       } catch (e) {
+//         console.warn("Result JSON fetch failed:", e);
+//       }
+
+//       // 2) Fallback to markdown endpoint
+//       const r2 = await fetch(resultMarkdownUrl, {
 //         headers: {
 //           Authorization: `Bearer ${LLAMA_CLOUD_API_KEY}`,
 //           Accept: "application/json",
 //         },
 //       });
-
-//       if (!resultResponse.ok) {
-//         const errorText = await resultResponse.text();
+//       if (!r2.ok) {
+//         const errorText = await r2.text();
 //         throw new Error(
-//           `Failed to fetch job result ${resultResponse.status}: ${errorText}`,
+//           `Failed to fetch markdown result ${r2.status}: ${errorText}`,
 //         );
 //       }
-
-//       const resultData = await resultResponse.json();
-//       const content = resultData.markdown;
-
-//       if (typeof content !== "string") {
-//         throw new Error(
-//           "Unexpected result format: 'markdown' property not found or not a string.",
-//         );
+//       const resultData = await r2.json();
+//       if (typeof resultData.markdown !== "string") {
+//         throw new Error("Unexpected markdown result format.");
 //       }
-
-//       console.log("Successfully fetched content, length:", content.length);
-//       return content;
-//     } else if (statusResult.status === "FAILED") {
-//       console.error("Parsing job failed:", statusResult);
-//       throw new Error(
-//         `Parsing job failed: ${
-//           statusResult.message || "Unknown LlamaParse error"
-//         }`,
+//       console.log(
+//         "Result: markdown string length =",
+//         resultData.markdown.length,
 //       );
+//       return resultData.markdown;
 //     }
-
 //     // If status is PENDING or IN_PROGRESS, wait 10 seconds before the next poll
 //     await new Promise((resolve) => setTimeout(resolve, 10000));
 //   }
@@ -293,17 +315,23 @@
 
 //   let currentPage = 1;
 //   let globalIndex = 0;
+//   if (pages.length <= 1) {
+//     console.warn("No page markers found. All chunks will default to page 1.");
+//   } else {
+//     console.log("Page markers detected. Split parts:", pages.length);
+//   }
 
 //   for (let i = 0; i < pages.length; i++) {
-//     const pageContent = pages[i].trim();
-//     if (!pageContent) continue;
+//     const part = pages[i].trim();
+//     if (!part) continue;
 
-//     if (/^\d+$/.test(pageContent)) {
-//       currentPage = parseInt(pageContent);
+//     // When using split with a capturing group, page numbers appear as standalone items between content chunks
+//     if (/^\d+$/.test(part)) {
+//       currentPage = parseInt(part, 10);
 //       continue;
 //     }
 
-//     const sentences = pageContent.split(/(?<=[.!?])\s+/);
+//     const sentences = part.split(/(?<=[.!?])\s+/);
 //     let currentChunk = "";
 //     let chunkStart = 0;
 
@@ -340,6 +368,11 @@
 //       });
 //     }
 //   }
+//   const dist = chunks.reduce<Record<number, number>>((a, c) => {
+//     a[c.pageNumber] = (a[c.pageNumber] || 0) + 1;
+//     return a;
+//   }, {});
+//   console.log("Chunk page distribution:", dist);
 
 //   return chunks;
 // }

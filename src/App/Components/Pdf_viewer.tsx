@@ -17,7 +17,6 @@ export default function PdfViewer({ documentUrl, className }: PdfViewerProps) {
   const [numPages, setNumPages] = useState<number>(0);
   const [scale, setScale] = useState(1.0);
   const { state, goToPage } = useChat();
-
   const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
     setNumPages(numPages);
   };

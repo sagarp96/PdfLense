@@ -17,7 +17,6 @@ export default function PdfChat({ documentUrl, documentId }: PdfChatProps) {
   useEffect(() => {
     dispatch({ type: "SET_DOCUMENT", payload: documentId });
   }, [documentId, dispatch]);
-
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [state.messages]);
@@ -39,9 +38,7 @@ export default function PdfChat({ documentUrl, documentId }: PdfChatProps) {
 
   return (
     <div className="ChatWindow grid grid-cols-2 border h-full w-[90%] m-auto mt-4 rounded-lg shadow-2xl">
-      {/* Chat Panel */}
       <div className="col-start-1 flex flex-col border-r">
-        {/* Chat Header */}
         <div className="p-4 border-b bg-gray-50">
           <h2 className="text-lg font-semibold text-gray-800">
             Chat with Document
@@ -107,7 +104,7 @@ export default function PdfChat({ documentUrl, documentId }: PdfChatProps) {
         </div>
       </div>
 
-      {/* PDF Viewer Panel */}
+      {/* PDF Viewer */}
       <div className="col-start-2">
         <PdfViewer documentUrl={documentUrl} className="h-full" />
       </div>

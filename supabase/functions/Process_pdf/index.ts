@@ -1,12 +1,10 @@
 import { corsHeaders } from "../_shared/cors.ts";
 import { createClient } from "@supabase/supabase-js";
-
+import { PDFDocument } from "pdf-lib";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const LLAMA_CLOUD_API_KEY = Deno.env.get("LLAMA_CLOUD_API_KEY")!;
-// const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY")!;
 const JINA_API_KEY = Deno.env.get("JINA_API_KEY")!;
-
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 interface DocumentChunk {
   content: string;
@@ -15,7 +13,6 @@ interface DocumentChunk {
   charStart: number;
   charEnd: number;
 }
-
 Deno.serve(async (req: Request): Promise<Response> => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -48,6 +45,12 @@ Deno.serve(async (req: Request): Promise<Response> => {
       return jsonResponse({ error: "Failed to download file" }, 400);
     }
 
+    // Get Page Numbes from PDF bytes
+    const pdfBytes = await fileData.arrayBuffer();
+    const pdfDoc = await PDFDocument.load(pdfBytes);
+    const actualPageCount = pdfDoc.getPageCount();
+    console.log("Actual PDF page count:", actualPageCount);
+
     // 2. Parse PDF with LlamaParse
     const parsedContent = await parseWithLlama(fileData, title);
     console.log("Parsed content:", parsedContent.length, "characters");
@@ -61,7 +64,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         file_size: fileData.size,
         bucket,
         storage_path: path,
-        page_count: extractPageCount(parsedContent),
+        page_count: actualPageCount,
         processing_status: "processing",
       })
       .select()
@@ -73,7 +76,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
     documentId = document.id;
     // 4. Chunk the content
-    const chunks = chunkContent(parsedContent);
+    const chunks = chunkContent(parsedContent, actualPageCount);
     console.log("Created", chunks.length, "chunks");
 
     // 5. Store chunks in database
@@ -116,12 +119,37 @@ Deno.serve(async (req: Request): Promise<Response> => {
       console.error("Embedding insertion error:", embeddingError);
       return jsonResponse({ error: "Failed to store embeddings" }, 500);
     }
+    // 8. Update document status to complete
+    const { error: updateError } = await supabase
+      .from("documents")
+      .update({ processing_status: "complete" })
+      .eq("id", document.id);
+
+    if (updateError) {
+      console.error("Document update error:", updateError);
+      return jsonResponse({ error: "Failed to update document status" }, 500);
+    }
+
+    console.log("PDF processing completed successfully");
+
+    return jsonResponse({
+      document_id: document.id,
+      page_count: document.page_count,
+      message: "Processing completed successfully",
+    });
   } catch (error) {
     console.error("Function error:", error);
-    return jsonResponse({ error: "Invalid request" }, 400);
-  }
 
-  return jsonResponse({ message: "Processing started" });
+    // If we have a documentId, mark it as failed
+    if (documentId) {
+      await supabase
+        .from("documents")
+        .update({ processing_status: "failed" })
+        .eq("id", documentId);
+    }
+
+    return jsonResponse({ error: "Processing failed: " + error.message }, 500);
+  }
 });
 async function parseWithLlama(
   fileData: Blob,
@@ -172,10 +200,14 @@ async function parseWithLlama(
     console.log("Got direct text content");
     return result.text;
   } else if (result.pages && Array.isArray(result.pages)) {
-    console.log("Got pages array");
-    return result.pages
-      .map((page: any) => page.text || page.markdown || "")
+    const marked = result.pages
+      .map((p: any, i: number) => {
+        const pageNo = p.page ?? p.page_number ?? (i + 1);
+        const text = p.text ?? p.markdown ?? "";
+        return `--- page ${pageNo} ---\n${text}`;
+      })
       .join("\n\n");
+    return marked;
   } else {
     console.error("Unexpected LlamaParse response format:", result);
     throw new Error("No content found in LlamaParse response");
@@ -186,9 +218,10 @@ async function pollForResults(jobId: string): Promise<string> {
   const maxAttempts = 30; // 5 minutes with 10s intervals
   const statusUrl =
     `https://api.cloud.llamaindex.ai/api/v1/parsing/job/${jobId}`;
-  const resultUrl =
+  const resultJsonUrl =
+    `https://api.cloud.llamaindex.ai/api/v1/parsing/job/${jobId}/result`; // JSON with pages[]
+  const resultMarkdownUrl =
     `https://api.cloud.llamaindex.ai/api/v1/parsing/job/${jobId}/result/markdown`;
-
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     console.log(`Polling attempt ${attempt}/${maxAttempts} for job ${jobId}`);
 
@@ -210,76 +243,122 @@ async function pollForResults(jobId: string): Promise<string> {
     console.log("Current job status:", statusResult.status);
 
     if (statusResult.status === "SUCCESS") {
-      console.log("Job complete. Fetching markdown result from:", resultUrl);
-      const resultResponse = await fetch(resultUrl, {
+      // 1) Try JSON pages
+      try {
+        const r1 = await fetch(resultJsonUrl, {
+          headers: {
+            Authorization: `Bearer ${LLAMA_CLOUD_API_KEY}`,
+            Accept: "application/json",
+          },
+        });
+        if (r1.ok) {
+          const json = await r1.json();
+          if (Array.isArray(json.pages)) {
+            console.log("Result: JSON pages length =", json.pages.length);
+            const marked = json.pages
+              .map((p: any, i: number) => {
+                const pageNo = p.page ?? p.page_number ?? (i + 1);
+                const text = p.text ?? p.markdown ?? "";
+                return `--- page ${pageNo} ---\n${text}`;
+              })
+              .join("\n\n");
+            return marked;
+          }
+          // Some responses may return { markdown}
+          if (typeof json.markdown === "string") {
+            console.log("Result: JSON markdown string");
+            return json.markdown;
+          }
+        } else {
+          console.warn("Result JSON fetch not OK:", r1.status, await r1.text());
+        }
+      } catch (e) {
+        console.warn("Result JSON fetch failed:", e);
+      }
+
+      // 2) Fallback to markdown endpoint
+      const r2 = await fetch(resultMarkdownUrl, {
         headers: {
           Authorization: `Bearer ${LLAMA_CLOUD_API_KEY}`,
           Accept: "application/json",
         },
       });
-
-      if (!resultResponse.ok) {
-        const errorText = await resultResponse.text();
+      if (!r2.ok) {
+        const errorText = await r2.text();
         throw new Error(
-          `Failed to fetch job result ${resultResponse.status}: ${errorText}`,
+          `Failed to fetch markdown result ${r2.status}: ${errorText}`,
         );
       }
-
-      const resultData = await resultResponse.json();
-      const content = resultData.markdown;
-
-      if (typeof content !== "string") {
-        throw new Error(
-          "Unexpected result format: 'markdown' property not found or not a string.",
-        );
+      const resultData = await r2.json();
+      if (typeof resultData.markdown !== "string") {
+        throw new Error("Unexpected markdown result format.");
       }
-
-      console.log("Successfully fetched content, length:", content.length);
-      return content;
-    } else if (statusResult.status === "FAILED") {
-      console.error("Parsing job failed:", statusResult);
-      throw new Error(
-        `Parsing job failed: ${
-          statusResult.message || "Unknown LlamaParse error"
-        }`,
+      console.log(
+        "Result: markdown string length =",
+        resultData.markdown.length,
       );
+      return resultData.markdown;
     }
-
     // If status is PENDING or IN_PROGRESS, wait 10 seconds before the next poll
     await new Promise((resolve) => setTimeout(resolve, 10000));
   }
 
   throw new Error("Parsing timed out after 5 minutes.");
 }
-function chunkContent(content: string): DocumentChunk[] {
+
+// CHANGED: accept pageCount and estimate page numbers when no markers exist
+function chunkContent(content: string, pageCount?: number): DocumentChunk[] {
   const chunks: DocumentChunk[] = [];
   const maxChunkSize = 1000;
   const overlap = 200;
 
-  // Split by page markers if available
-  const pages = content.split(/---\s*page\s*(\d+)\s*---/i);
+  // Prefer explicit markers: --- page X ---
+  const markerRegex = /---\s*page\s*(\d+)\s*---/i;
+  const parts = content.split(markerRegex);
 
-  let currentPage = 1;
-  let globalIndex = 0;
+  // Branch A: markers present (split() with capturing group yields [text, num, text, num, text...])
+  if (parts.length > 1) {
+    console.log("Page markers detected. Parts:", parts.length);
+    let currentPage = 1;
+    let globalIndex = 0;
 
-  for (let i = 0; i < pages.length; i++) {
-    const pageContent = pages[i].trim();
-    if (!pageContent) continue;
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i].trim();
+      if (!part) continue;
 
-    if (/^\d+$/.test(pageContent)) {
-      currentPage = parseInt(pageContent);
-      continue;
-    }
+      if (/^\d+$/.test(part)) {
+        currentPage = parseInt(part, 10);
+        continue;
+      }
 
-    const sentences = pageContent.split(/(?<=[.!?])\s+/);
-    let currentChunk = "";
-    let chunkStart = 0;
+      const sentences = part.split(/(?<=[.!?])\s+/);
+      let currentChunk = "";
+      let chunkStart = 0;
 
-    for (const sentence of sentences) {
-      if (
-        currentChunk.length + sentence.length > maxChunkSize &&
-        currentChunk.length > 0
-      ) {
+      for (const sentence of sentences) {
+        if (
+          currentChunk.length + sentence.length > maxChunkSize &&
+          currentChunk.length > 0
+        ) {
+          chunks.push({
+            content: currentChunk.trim(),
+            pageNumber: currentPage,
+            chunkIndex: globalIndex++,
+            charStart: chunkStart,
+            charEnd: chunkStart + currentChunk.length,
+          });
+
+          const words = currentChunk.split(" ");
+          const overlapWords = words.slice(-Math.ceil(overlap / 5)).join(" ");
+          currentChunk = overlapWords + " " + sentence;
+          chunkStart += currentChunk.length - overlapWords.length -
+            sentence.length - 1;
+        } else {
+          currentChunk += (currentChunk ? " " : "") + sentence;
+        }
+      }
+
+      if (currentChunk.trim()) {
         chunks.push({
           content: currentChunk.trim(),
           pageNumber: currentPage,
@@ -287,35 +366,78 @@ function chunkContent(content: string): DocumentChunk[] {
           charStart: chunkStart,
           charEnd: chunkStart + currentChunk.length,
         });
+      }
+    }
+  } else {
+    const pages = Math.max(1, pageCount || 1);
+    const avgCharsPerPage = Math.max(1000, Math.floor(content.length / pages));
+    console.warn(
+      `No page markers found. Estimating pages by length. pages=${pages}, avgCharsPerPage=${avgCharsPerPage}`,
+    );
+
+    const sentences = content.split(/(?<=[.!?])\s+/);
+    let currentChunk = "";
+    let globalIndex = 0;
+    let globalCharPos = 0;
+    let chunkStartGlobal = 0;
+
+    for (const sentence of sentences) {
+      if (
+        currentChunk.length + sentence.length > maxChunkSize &&
+        currentChunk.length > 0
+      ) {
+        // Estimate page from the start position of the chunk
+        const estimatedPage = Math.min(
+          pages,
+          Math.floor(chunkStartGlobal / avgCharsPerPage) + 1,
+        );
+
+        chunks.push({
+          content: currentChunk.trim(),
+          pageNumber: estimatedPage,
+          chunkIndex: globalIndex++,
+          charStart: chunkStartGlobal,
+          charEnd: chunkStartGlobal + currentChunk.length,
+        });
 
         const words = currentChunk.split(" ");
         const overlapWords = words.slice(-Math.ceil(overlap / 5)).join(" ");
         currentChunk = overlapWords + " " + sentence;
-        chunkStart += currentChunk.length - overlapWords.length -
-          sentence.length - 1;
+
+        chunkStartGlobal = globalCharPos - overlapWords.length - 1;
+        if (chunkStartGlobal < 0) chunkStartGlobal = 0;
       } else {
         currentChunk += (currentChunk ? " " : "") + sentence;
       }
+
+      globalCharPos += sentence.length + 1; // approximate space/separator
     }
 
     if (currentChunk.trim()) {
+      const estimatedPage = Math.min(
+        pages,
+        Math.floor(chunkStartGlobal / avgCharsPerPage) + 1,
+      );
+
       chunks.push({
         content: currentChunk.trim(),
-        pageNumber: currentPage,
+        pageNumber: estimatedPage,
         chunkIndex: globalIndex++,
-        charStart: chunkStart,
-        charEnd: chunkStart + currentChunk.length,
+        charStart: chunkStartGlobal,
+        charEnd: chunkStartGlobal + currentChunk.length,
       });
     }
   }
 
+  const dist = chunks.reduce<Record<number, number>>((a, c) => {
+    a[c.pageNumber] = (a[c.pageNumber] || 0) + 1;
+    return a;
+  }, {});
+  console.log("Chunk page distribution:", dist);
+
   return chunks;
 }
-function extractPageCount(content: string): number {
-  // Estimate page count based on content length and markdown page breaks
-  const pageBreaks = (content.match(/---\s*page\s*\d+\s*---/gi) || []).length;
-  return Math.max(1, pageBreaks || Math.ceil(content.length / 3000));
-}
+
 async function generateEmbeddings(texts: string[]): Promise<number[][]> {
   const model = "jina-embeddings-v2-base-en";
   const apiUrl = "https://api.jina.ai/v1/embeddings";
