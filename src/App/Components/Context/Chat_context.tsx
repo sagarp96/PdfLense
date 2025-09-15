@@ -88,12 +88,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "ADD_MESSAGE", payload: userMessage });
 
     try {
-      console.log("Sending message to edge function:", {
-        message,
-        document_id: state.documentId,
-        session_id: state.sessionId,
-      });
-
       const { data, error } = await supabase.functions.invoke("Pdf_chat", {
         body: {
           message,

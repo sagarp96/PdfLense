@@ -96,7 +96,6 @@ export default function FileUpload({
         message: `Successfully processed`,
       });
       onDocumentProcessed(result);
-      console.log("Processed Document:", result);
     } catch (error) {
       setError(error instanceof Error ? error.message : "Processing failed");
       setUploadProgress(null);
