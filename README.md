@@ -1,4 +1,4 @@
-# PdfLense — Chat with your PDFs
+# PdfLens — Chat with your PDFs
 
 https://pdflense.netlify.app/
 
